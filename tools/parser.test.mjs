@@ -2,6 +2,29 @@
 import fs from 'node:fs';
 import {parseProgram, detectCourseCode} from '../public/parser.js';
 const item=(str,x,y)=>({str,x,y,w:str.length*4,h:10});
+for (const code of ['SB', 'MÜZ', 'ENG', 'FİZ']) {
+ const dotted = [...code].join('.');
+ for (const prefix of [code, dotted, [...code].join(' . ')]) {
+  const pages = [[
+   item(`ÖĞRENME ÇIKTILARI ${code}.7.3.1. İlk çıktı`,60,750),
+   item(`${prefix}.7.3.2. İkinci çıktı`,60,730),
+   item(`${dotted}.7.3.3. Üçüncü çıktı`,60,710),
+   item(`Öğrenme Öğretme Uygulamaları ${code}.7.3.1. İlk uygulama.`,60,650),
+   item(`${prefix}.7.3.2. İkinci uygulama.`,60,630),
+   item('İkinci uygulamanın devamı.',60,610),
+   item(`${dotted}.7.3.3. Üçüncü uygulama.`,60,590),
+  ]];
+  assert.equal(detectCourseCode(pages).code,code);
+  for (const options of [{startPage:0}, {startPage:0,courseCode:dotted}]) {
+   const result = parseProgram(pages,options);
+   assert.deepEqual(result.warnings,[]);
+   assert.equal(result.rows.length,3);
+   assert.equal(result.rows[1].code,`${code}.7.3.2`);
+   assert.equal(result.rows[1].applications,`${code}.7.3.2 İkinci uygulama. İkinci uygulamanın devamı.`);
+   assert.equal(result.rows[0].applications,`${code}.7.3.1 İlk uygulama.`);
+  }
+ }
+}
 for(const code of ['MÜZ','ENG','FİZ']) {
  const pages=[[
  item('ÖĞRENME ÇIKTILARI',50,750),item(`${code}.6.1.3. Birinci çıktı`,180,750),

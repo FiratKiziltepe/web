@@ -174,17 +174,23 @@ function splitRow(row, contentX) {
 
 /* ---------- 3) Ders kodu tespiti ---------------------------------------- */
 
+// S.B., S. B. ve SB aynı ders kodudur. Sayısal basamaklar değişmez.
+const normalizeCourseCode = (code) => norm(code).replace(/[.\s]+/g, "");
+
 export function detectCourseCode(pages, startPage = 0) {
   const scan = (segments) => {
     const counts = new Map();
     const re = new RegExp(
-      `(?:^|[\\s(\\[])([${UP}][${UP}0-9]{1,7})((?:\\s*\\.\\s*|\\s+)\\d+(?:\\s*\\.\\s*\\d+){${segments - 1}})(?!\\d|\\s*\\.\\s*\\d)`,
+      `(?:^|[\\s(\\[])([${UP}](?:[${UP}0-9]|\\s*\\.\\s*[${UP}]){1,7})((?:\\s*\\.\\s*|\\s+)\\d+(?:\\s*\\.\\s*\\d+){${segments - 1}})(?!\\d|\\s*\\.\\s*\\d)`,
       "g"
     );
     for (let p = startPage; p < pages.length; p++) {
       const txt = " " + buildLines(pages[p]).map((r) => joinItems(r.items)).join(" ");
       let m;
-      while ((m = re.exec(txt))) counts.set(m[1], (counts.get(m[1]) || 0) + 1);
+      while ((m = re.exec(txt))) {
+        const code = normalizeCourseCode(m[1]);
+        counts.set(code, (counts.get(code) || 0) + 1);
+      }
     }
     return [...counts.entries()].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]);
   };
@@ -244,16 +250,17 @@ export function parseProgram(pages, options = {}) {
   const startPage =
     options.startPage != null ? options.startPage : detectStartPage(pages).start;
   const courseCode =
-    norm(options.courseCode || "").replace(/\.$/, "") || detectCourseCode(pages, startPage).code;
+    normalizeCourseCode(options.courseCode || "") || detectCourseCode(pages, startPage).code;
 
   if (!courseCode) {
     warnings.push("Ders kodu tespit edilemedi. Kodu elle girmeyi deneyin.");
     return { rows: [], courseCode: null, startPage, warnings, areaCount: 0 };
   }
 
-  /* "BİY.9.1.5" kadar "BİY. 9.1.5" ve "BİY .9.1.5" yazımlarını da yakalar */
+  /* Ders kısaltmasındaki noktalar isteğe bağlıdır: SB ve S.B. */
+  const coursePattern = [...courseCode].map(escapeRe).join("\\s*\\.?\\s*");
   const codeLead = new RegExp(
-    `^\\s*(${escapeRe(courseCode)}(?:\\s*\\.\\s*|\\s+)\\d+(?:\\s*\\.\\s*\\d+){1,3})\\s*\\.?(?=[\\s)a-zçğıöşü(]|$)`,
+    `^\\s*(${coursePattern}(?:\\s*\\.\\s*|\\s+)\\d+(?:\\s*\\.\\s*\\d+){1,3})\\s*\\.?(?=[\\s)a-zçğıöşü(]|$)`,
     "i"
   );
   const cleanCode = (s) => courseCode + "." + s.match(/\d+/g).join(".");
