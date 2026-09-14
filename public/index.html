@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Öğretim Programı Veri Çıkarma Aracı</title>
+<meta name="description" content="MEB öğretim programı PDF'lerinden öğrenme çıktıları, süreç bileşenleri ve öğrenme-öğretme uygulamalarını tabloya dönüştürüp Excel'e aktaran çevrim içi araç." />
+<link rel="stylesheet" href="./style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📑%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+<header class="site-head">
+  <div class="wrap">
+    <h1>Öğretim Programı Veri Çıkarma Aracı</h1>
+    <p class="lede">
+      Millî Eğitim Bakanlığı öğretim programı PDF dosyasını yükleyin; öğrenme çıktıları,
+      süreç bileşenleri ve öğrenme-öğretme uygulamaları otomatik olarak çözümlenip
+      tablo hâline getirilir ve Excel dosyası olarak indirilebilir.
+    </p>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ---------------- Yükleme ---------------- -->
+  <section id="uploader" class="card">
+    <div id="drop" class="drop" tabindex="0" role="button" aria-label="PDF dosyası seçin veya sürükleyin">
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="ico"><path d="M12 16V4m0 0L8 8m4-4 4 4M4 17v1a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-1"/></svg>
+      <p class="drop-main">PDF dosyasını buraya sürükleyin</p>
+      <p class="drop-sub">veya <span class="link">bilgisayarınızdan seçin</span> · dosyanız sunucuya gönderilmez, tarayıcınızda işlenir</p>
+      <input type="file" id="file" accept="application/pdf,.pdf" hidden />
+    </div>
+
+    <details class="adv">
+      <summary>Gelişmiş ayarlar</summary>
+      <div class="adv-grid">
+        <label>
+          <span>Ders kodu</span>
+          <input type="text" id="courseCode" placeholder="Otomatik (örn. HB, İNG, FİZ)" autocomplete="off" />
+          <small>Boş bırakılırsa program içinden otomatik bulunur.</small>
+        </label>
+        <label>
+          <span>Başlangıç sayfası</span>
+          <input type="number" id="startPage" min="1" placeholder="Otomatik" />
+          <small>Programın yapısı/tanıtım sayfaları otomatik atlanır. Gerekirse elle belirtin.</small>
+        </label>
+      </div>
+    </details>
+
+    <div id="progress" class="progress" hidden>
+      <div class="bar"><div id="barFill"></div></div>
+      <p id="progressText">Hazırlanıyor…</p>
+    </div>
+
+    <p id="error" class="error" hidden></p>
+  </section>
+
+  <!-- ---------------- Sonuçlar ---------------- -->
+  <section id="results" hidden>
+
+    <div class="summary card">
+      <div class="chips">
+        <span class="chip"><b id="sumFile">—</b><small>dosya</small></span>
+        <span class="chip"><b id="sumCode">—</b><small>ders kodu</small></span>
+        <span class="chip"><b id="sumRows">0</b><small>öğrenme çıktısı</small></span>
+        <span class="chip"><b id="sumAreas">0</b><small>öğrenme alanı</small></span>
+        <span class="chip"><b id="sumPages">0</b><small>sayfa</small></span>
+      </div>
+      <div id="warnings" class="warnings" hidden></div>
+    </div>
+
+    <div class="toolbar card">
+      <div class="filters">
+        <label class="f">
+          <span>Sınıf</span>
+          <select id="fGrade"><option value="">Tümü</option></select>
+        </label>
+        <label class="f">
+          <span>Ünite / Öğrenme alanı</span>
+          <select id="fArea"><option value="">Tümü</option></select>
+        </label>
+        <label class="f grow">
+          <span>Ara</span>
+          <input type="search" id="fSearch" placeholder="Metin içinde ara…" autocomplete="off" />
+        </label>
+        <label class="f check">
+          <span>Denetim</span>
+          <span class="chk"><input type="checkbox" id="fIssues" /> Yalnızca eksik/kısa uygulama metni olan satırlar</span>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnExpand" class="btn ghost" type="button">Metinleri aç</button>
+        <button id="btnExcel" class="btn primary" type="button">Excel indir</button>
+        <button id="btnReset" class="btn ghost" type="button">Yeni PDF</button>
+      </div>
+      <p id="count" class="count"></p>
+    </div>
+
+    <div class="table-wrap card">
+      <table id="table">
+        <thead>
+          <tr>
+            <th class="c-no">Sıra No</th>
+            <th class="c-area">Ünite/Tema/Öğrenme alanı</th>
+            <th class="c-out">Öğrenme Çıktısı</th>
+            <th class="c-comp">Süreç Bileşenleri</th>
+            <th class="c-app">Öğrenme Öğretme Uygulamaları</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <p id="empty" class="empty" hidden>Filtrelerle eşleşen kayıt bulunamadı.</p>
+    </div>
+  </section>
+
+  <section class="card info">
+    <h2>Nasıl çalışır?</h2>
+    <ol>
+      <li>PDF, tarayıcınızda çözümlenir; dosya hiçbir sunucuya yüklenmez.</li>
+      <li>“…Öğretim Programı’nın Yapısı” bölümündeki tanıtım/şema sayfaları tabloya alınmaz.</li>
+      <li>Ders kodu (HB, İNG, FİZ vb.) program metninden otomatik bulunur; gerekirse gelişmiş ayarlardan elle girilebilir.</li>
+      <li>Her öğrenme çıktısı, kendi süreç bileşenleri ve öğrenme-öğretme uygulamaları ile eşleştirilir; satır sonu tireleri birleştirilir.</li>
+      <li>Excel çıktısı, ekranda görünen (filtrelenmiş) satırları içerir.</li>
+    </ol>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <p>Veriler tarayıcıda işlenir · Kaynak PDF: Millî Eğitim Bakanlığı öğretim programları</p>
+  </div>
+</footer>
+
+<script src="./vendor/exceljs.min.js"></script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
