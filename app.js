@@ -24,7 +24,7 @@ const HEADERS = [
   "Öğrenme Öğretme Uygulamaları",
 ];
 
-let state = { rows: [], filtered: [], fileName: "", expanded: false, open: new Set() };
+let state = { rows: [], filtered: [], unmatchedApplications: [], fileName: "", expanded: false, open: new Set() };
 
 /* ---------------- yükleme olayları ---------------- */
 
@@ -116,6 +116,7 @@ async function handleFile(file) {
     }
 
     state.rows = res.rows;
+    state.unmatchedApplications = res.unmatchedApplications || [];
     state.open = new Set();
     setProgress(100, "Tamamlandı.");
     renderSummary(res, doc.numPages);
@@ -145,16 +146,18 @@ function renderSummary(res, pageCount) {
     el.warnings.innerHTML =
       "<b>Dikkat edilmesi gerekenler</b><ul>" +
       res.warnings.map((w) => `<li>${esc(w)}</li>`).join("") +
-      "</ul>";
+      "</ul>" + (res.unmatchedApplications?.length ?
+        '<details><summary>Çıktı listesinde karşılığı olmayan uygulama metinleri</summary><p>Bu metinler Excel dosyasında “Eşleşmeyen uygulamalar” sayfasına da eklenir.</p>' +
+        res.unmatchedApplications.map(r => `<details><summary>${esc(r.code)} — ${esc(r.area)}</summary><p>${esc(r.applications)}</p></details>`).join("") + '</details>' : "");
   } else {
     el.warnings.hidden = true;
   }
 }
 
 function buildFilters(rows) {
-  const grades = [...new Set(rows.map((r) => r.grade).filter((g) => g != null))].sort((a, b) => a - b);
+  const grades = [...new Set(rows.map((r) => r.grade).filter((g) => g != null))].sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
   el.fGrade.innerHTML =
-    '<option value="">Tümü</option>' + grades.map((g) => `<option value="${g}">${g}. sınıf</option>`).join("");
+    '<option value="">Tümü</option>' + grades.map((g) => `<option value="${g}">${typeof g === "number" ? `${g}. sınıf` : esc(g)}</option>`).join("");
   const areas = [...new Set(rows.map((r) => r.area).filter(Boolean))];
   el.fArea.innerHTML =
     '<option value="">Tümü</option>' + areas.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join("");
@@ -221,10 +224,10 @@ function appCell(r, q) {
     return '<span class="missing">Bu çıktı için kaynak PDF\'te uygulama metni bulunamadı.</span>';
   const text = r.applications;
   const long = text.length > 420;
-  const open = state.expanded || state.open.has(r.code) || !long;
+  const open = state.expanded || state.open.has(r.id || r.code) || !long;
   return (
     `<div class="${open ? "" : "clamp"}">${hl(text, q)}</div>` +
-    (long ? `<button class="more" type="button" data-code="${esc(r.code)}">${open ? "Daha az göster" : "Devamını göster"}</button>` : "")
+    (long ? `<button class="more" type="button" data-code="${esc(r.id || r.code)}">${open ? "Daha az göster" : "Devamını göster"}</button>` : "")
   );
 }
 
@@ -236,7 +239,7 @@ el.btnExpand.addEventListener("click", () => {
 });
 
 el.btnReset.addEventListener("click", () => {
-  state = { rows: [], filtered: [], fileName: "", expanded: false, open: new Set() };
+  state = { rows: [], filtered: [], unmatchedApplications: [], fileName: "", expanded: false, open: new Set() };
   el.results.hidden = true;
   el.file.value = "";
   el.fSearch.value = "";
@@ -284,6 +287,17 @@ el.btnExcel.addEventListener("click", async () => {
     });
     ws.autoFilter = { from: "A1", to: "E1" };
 
+    if (state.unmatchedApplications.length) {
+      const extra = wb.addWorksheet("Eşleşmeyen uygulamalar", { views: [{state:"frozen",ySplit:1}] });
+      extra.columns = [
+        {header:"Kaynak kod",key:"code",width:24},
+        {header:"Ünite/Tema",key:"area",width:38},
+        {header:"Uygulama metni",key:"applications",width:95},
+      ];
+      extra.addRows(state.unmatchedApplications);
+      extra.getRow(1).font = {bold:true};
+      extra.eachRow(row => { row.alignment = {vertical:"top",wrapText:true}; });
+    }
     const buf = await wb.xlsx.writeBuffer();
     const name = (state.fileName.replace(/\.pdf$/i, "") || "ogretim-programi") + "-cikti.xlsx";
     downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), name);

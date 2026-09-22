@@ -76,6 +76,13 @@ function joinItems(items) {
 
 const SEC = { OUTCOMES: "outcomes", APPS: "apps", NONE: "none" };
 
+const EN_LABELS = [
+  [/^LEARNING OUTCOMES(?: AND PROCESS COMPONENTS)?$/, SEC.OUTCOMES],
+  [/^(?:AND )?PROCESS COMPONENTS$/, SEC.OUTCOMES],
+  [/^LEARNING[ -]TEACHING PRACTICES$/, SEC.APPS],
+  [/^(?:CONTENT FRAME|INDICATORS FOR LEARNING(?: \(ASSESSMENT AND EVALUATION\))?|LEARNING[ -]TEACHING EXPERIENCES|DIFFERENTIATION|EXPANSION|SUPPORTING|TEACHER REFLECTIONS|BASIC ACCEPTATIONS(?::.*)?|PRE-EVALUATION PROCESS|ESTABLISHING LINKS)$/, SEC.NONE],
+];
+
 const LABELS = [
   // --- öğrenme çıktıları ---
   [/^ÖĞRENME ÇIKTILARI(?: VE)?(?: SÜREÇ BİLEŞENLERİ)?/, SEC.OUTCOMES],
@@ -147,6 +154,7 @@ const FRAGMENT_LABEL =
 
 export function classifyLabel(label) {
   const nl = norm(label);
+  for (const [re, sec] of EN_LABELS) if (re.test(nl.replace(/İ/g, "I").replace(/[^\x00-\x7F]/g, ""))) return sec;
   for (const [re, sec] of LABELS) if (re.test(nl)) return sec;
   return null;
 }
@@ -155,6 +163,9 @@ export function classifyLabel(label) {
 function splitRow(row, contentX) {
   const items = row.items;
   const full = joinItems(items);
+  if (norm(full) === "TEMA SONU DEĞERLENDİRME") return {label:full, section:SEC.NONE, text:"", full};
+  const enSection = EN_LABELS.find(([re]) => re.test(norm(full).replace(/İ/g, "I").replace(/[^\x00-\x7F]/g, "")));
+  if (enSection) return { label: full, section: enSection[1], text: "", full };
   // Some PDFs store both table cells in one text item. Split explicit
   // headings before applying the coordinate-based column boundary.
   const inline = full.match(/^(Öğrenme[\s‐‑–—-]*Öğretme\s+Uygulamaları|ÖĞRENME ÇIKTILARI(?: VE SÜREÇ BİLEŞENLERİ)?)(?=\s|$)/i);
@@ -178,26 +189,29 @@ function splitRow(row, contentX) {
 const normalizeCourseCode = (code) => norm(code).replace(/[.\s]+/g, "");
 
 export function detectCourseCode(pages, startPage = 0) {
-  const scan = (segments) => {
-    const counts = new Map();
-    const re = new RegExp(
-      `(?:^|[\\s(\\[])([${UP}](?:[${UP}0-9]|\\s*\\.\\s*[${UP}]){1,7})((?:\\s*\\.\\s*|\\s+)\\d+(?:\\s*\\.\\s*\\d+){${segments - 1}})(?!\\d|\\s*\\.\\s*\\d)`,
-      "g"
-    );
-    for (let p = startPage; p < pages.length; p++) {
-      const txt = " " + buildLines(pages[p]).map((r) => joinItems(r.items)).join(" ");
-      let m;
-      while ((m = re.exec(txt))) {
+  const counts = new Map();
+  const outcomeCounts = new Map();
+  let section = SEC.NONE;
+  // A course prefix contains letters; the first number belongs to its code,
+  // even when the separator is missing (TDE3.1).
+  const re = new RegExp(`(?:^|[\\s(\\[])([${UP}](?:[${UP}]|\\s*\\.\\s*[${UP}]){1,7})\\s*\\.?\\s*\\d+(?:\\s*\\.\\s*(?:[${UP}]+\\s*\\.?\\s*)?\\d+){1,3}(?![${UP}\\d]|\\s*\\.\\s*\\d)`, "g");
+  for (let p = startPage; p < pages.length; p++) {
+    if (isSchemaPage(norm(pages[p].map(i => i.str).join(" ")))) continue;
+    const contentX = detectContentX(pages[p]);
+    for (const row of buildLines(pages[p])) {
+      const ln = splitRow(row, contentX);
+      const txt = joinItems(row.items);
+      if (matchArea(norm(txt))) section = SEC.NONE;
+      section = ln.section || classifyLabel(txt) || section;
+      for (const m of txt.matchAll(re)) {
         const code = normalizeCourseCode(m[1]);
         counts.set(code, (counts.get(code) || 0) + 1);
+        if (section === SEC.OUTCOMES) outcomeCounts.set(code, (outcomeCounts.get(code) || 0) + 1);
       }
     }
-    return [...counts.entries()].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]);
-  };
-  // önce ders.sınıf.alan.çıktı (3 sayı), bulunamazsa ders.alan.çıktı (2 sayı)
-  let sorted = scan(3);
-  if (!sorted.length) sorted = scan(2);
-  return { code: sorted.length ? sorted[0][0] : null, candidates: sorted };
+  }
+  const sorted = [...counts].filter(([, n]) => n >= 3).sort((a,b) => (outcomeCounts.get(b[0]) || 0) - (outcomeCounts.get(a[0]) || 0) || b[1]-a[1]);
+  return { code: sorted[0]?.[0] || null, candidates: sorted };
 }
 
 /* ---------- 4) İçeriğin başlayacağı sayfa -------------------------------- */
@@ -205,7 +219,12 @@ export function detectCourseCode(pages, startPage = 0) {
    "Öğrenme alanı numarası" şemasını taşıyan sayfalar) atlanır.             */
 
 function isSchemaPage(text) {
+  // Explanatory sample tables following the code diagram are not curriculum rows.
+  if (/HEDEFLENEN ÖĞRENCİ PROFİLİ/.test(text) && /İFADE EDER/.test(text) && /ÖĞRENME SÜRECİNDE/.test(text)) return true;
   let hits = 0;
+  if (/COURSE CODE/.test(text)) hits++;
+  if (/NUMBER OF LEARNING OUTCOME/.test(text)) hits++;
+  if (/NUMBER OF THEME/.test(text)) hits++;
   if (/DERSİN KODU/.test(text)) hits++;
   if (/ÖĞRENME ÇIKTISI NUMARASI/.test(text)) hits++;
   if (/ÖĞRENME ALANI NUMARASI/.test(text)) hits++;
@@ -233,6 +252,7 @@ export function detectStartPage(pages) {
 
 /* "3. ÖĞRENME ALANI: AİLEM VE TOPLUM" · "1. ÜNİTE: …" · "ÜNİTE 1: …" · "2. TEMA: …" */
 const AREA_RES = [
+  /^\s*THEME\s*(\d+)\s*:\s*(.+)$/,
   /^\s*(\d+)\s*[.)]\s*(?:ÖĞRENME ALANI|ÖĞRENME ALANl|ÜNİTE|TEMA)\s*[::]\s*(.+)$/,
   /^\s*(?:ÖĞRENME ALANI|ÜNİTE|TEMA)\s*(\d+)\s*[::]\s*(.+)$/,
 ];
@@ -260,10 +280,12 @@ export function parseProgram(pages, options = {}) {
   /* Ders kısaltmasındaki noktalar isteğe bağlıdır: SB ve S.B. */
   const coursePattern = [...courseCode].map(escapeRe).join("\\s*\\.?\\s*");
   const codeLead = new RegExp(
-    `^\\s*(${coursePattern}(?:\\s*\\.\\s*|\\s+)\\d+(?:\\s*\\.\\s*\\d+){1,3})\\s*\\.?(?=[\\s)a-zçğıöşü(]|$)`,
-    "i"
+    `^\\s*(${coursePattern}\\s*\\.?\\s*(\\d+(?:\\s*\\.\\s*(?:[${UP}]+\\s*\\.?\\s*)?\\d+){1,3}))\\s*\\.?(?=[\\s,;:)a-zçğıöşü(]|$)`, "i"
   );
-  const cleanCode = (s) => courseCode + "." + s.match(/\d+/g).join(".");
+  const cleanCode = (s) => {
+    const lead = s.match(codeLead);
+    return courseCode + "." + lead[2].replace(/\s+/g, "").replace(/([A-Za-zÇĞİÖŞÜçğıöşü]+)\.(?=\d)/g, "$1").toLocaleUpperCase("tr-TR");
+  };
 
   /* 5a) içerik sayfalarını tek akışa çevir */
   const stream = [];
@@ -304,7 +326,7 @@ export function parseProgram(pages, options = {}) {
     const t = ln.full.trim();
     if (!t) return true;
     if (/^\d{1,4}$/.test(t)) return true;
-    if (t.length < 140 && /(?:DERS.*ÖĞRET.*PROGRAM|^PROGRAMI$)/.test(norm(t))) return true;
+    if (t.length < 140 && /(?:DERS.*ÖĞRET.*PROGRAM|^PROGRAMI$|^THE ENGLISH LANGUAGE CURRICULUM$)/.test(norm(t))) return true;
     return chromeKeys.has(norm(t).replace(/\d+/g, "#"));
   };
 
@@ -317,17 +339,25 @@ export function parseProgram(pages, options = {}) {
   let curOutcome = null;
   let curApp = null;
   let order = 0;
+  let scope = 0;
+  let currentGrade = null;
+  const keyFor = code => `${scope}|${code}`;
 
   for (let si = 0; si < stream.length; si++) {
     const ln = stream[si];
     if (isChrome(ln)) continue;
 
+    const gradeHeading = norm(ln.full).match(/^(?:(\d+)\. SINIF TEMALARI|HAZIRLIK SINIFI TEMALARI)$/);
+    if (gradeHeading) { currentGrade = gradeHeading[1] ? +gradeHeading[1] : "Hazırlık"; continue; }
+
     /* öğrenme alanı / ünite başlığı */
     const am = matchArea(norm(ln.full));
     if (am) {
       const name = ln.full.slice(ln.full.indexOf(":") + 1).trim();
+      if (area && area.no === +am[1] && norm(area.name) === norm(name || am[2])) continue;
       area = { no: +am[1], name: name || am[2] };
       areas.push(area);
+      scope++;
       section = SEC.NONE;
       curOutcome = null;
       curApp = null;
@@ -352,6 +382,11 @@ export function parseProgram(pages, options = {}) {
 
     const body = (ln.text || "").trim();
     if (!body) continue;
+    // Skill subheadings separate TDE application groups without becoming part
+    // of the preceding outcome's prose.
+    if (/^(Metin Tahlili \(Anlama\)|Edebiyat Atölyesi \(Anlatma\)|Dinleme\/İzleme|Okuma|Konuşma|Yazma)$/.test(body)) {
+      curOutcome = null; curApp = null; continue;
+    }
 
     /* Güvenlik ağı: sütun ayrımı bozulup bölüm başlığı içerik sütununa
        düşerse (sayfa düzeni değişen PDF'ler) metnin taşmasını engelle. */
@@ -371,14 +406,17 @@ export function parseProgram(pages, options = {}) {
         const code = cleanCode(lead[1]);
         curOutcome = {
           code,
+          key: keyFor(code),
+          scope,
+          grade: currentGrade,
           title: body.slice(lead[0].length).trim().replace(/^[.\s]+/, ""),
           comps: [],
           area: area ? area.name : "",
           areaNo: area ? area.no : null,
           order: order++,
         };
-        if (!outcomes.has(code)) outcomes.set(code, curOutcome);
-        else curOutcome = outcomes.get(code);
+        if (!outcomes.has(curOutcome.key)) outcomes.set(curOutcome.key, curOutcome);
+        else curOutcome = outcomes.get(curOutcome.key);
       } else if (/^[a-zçğıöşü]\s*[)\.]\s/.test(body)) {
         if (curOutcome) curOutcome.comps.push(body.trim());
       } else if (curOutcome) {
@@ -395,11 +433,20 @@ export function parseProgram(pages, options = {}) {
     if (section === SEC.APPS) {
       const lead = body.match(codeLead);
       if (lead) {
-        curApp = cleanCode(lead[1]);
-        const rest = body.slice(lead[0].length).trim();
-        apps.set(curApp, appendText(apps.get(curApp) || "", rest));
+        curApp = [keyFor(cleanCode(lead[1]))];
+        let rest = body.slice(lead[0].length).trim();
+        // A heading can name several outcomes sharing the following activity.
+        while (true) {
+          const nextText = rest.replace(/^(?:[,;]\s*|(?:ve|and)\s+)/i, "");
+          if (nextText === rest) break;
+          const next = nextText.match(codeLead);
+          if (!next) break;
+          curApp.push(keyFor(cleanCode(next[1])));
+          rest = nextText.slice(next[0].length).trim();
+        }
+        for (const key of curApp) apps.set(key, appendText(apps.get(key) || "", rest));
       } else if (curApp) {
-        apps.set(curApp, appendText(apps.get(curApp) || "", body));
+        for (const key of curApp) apps.set(key, appendText(apps.get(key) || "", body));
       }
       continue;
     }
@@ -410,23 +457,27 @@ export function parseProgram(pages, options = {}) {
   const repaired = [];
   for (const appCode of [...apps.keys()]) {
     if (outcomes.has(appCode)) continue;
-    const a = appCode.split(".").slice(1);
+    const [appScope, rawCode] = appCode.split("|");
+    const a = rawCode.split(".").slice(1);
     const hits = [...outcomes.keys()].filter((oc) => {
-      if (apps.has(oc)) return false;
-      const o = oc.split(".").slice(1);
-      if (o.length !== a.length + 1) return false;
-      // ortadaki (öğrenme alanı) basamağı düşünce kod tutuyor mu?
-      return o.filter((_, i) => i !== 1).join(".") === a.join(".");
+      if (apps.has(oc) || !oc.startsWith(appScope + "|")) return false;
+      const o = outcomes.get(oc).code.split(".").slice(1);
+      // Never change the grade or skill/outcome suffix. Resolve only one
+      // missing/extra middle number, or one theme typo, in the current theme.
+      if (o[0] !== a[0] || o.at(-1) !== a.at(-1)) return false;
+      if (o.length === a.length + 1) return o.slice(1,-1).some((_, i) => o.filter((_, j) => j !== i+1).join(".") === a.join("."));
+      if (a.length === o.length + 1) return a.slice(1,-1).some((_, i) => a.filter((_, j) => j !== i+1).join(".") === o.join("."));
+      return /^[A-Z]+\d+$/.test(o.at(-1)) && o.length === a.length && o.filter((v,i) => v !== a[i]).length === 1;
     });
     if (hits.length === 1) {
       apps.set(hits[0], apps.get(appCode));
       apps.delete(appCode);
-      repaired.push(`${appCode} → ${hits[0]}`);
+      repaired.push(`${rawCode} → ${outcomes.get(hits[0]).code}`);
     }
   }
   if (repaired.length)
     warnings.push(
-      `Kaynak PDF'te eksik yazılmış ${repaired.length} uygulama başlığı eşleştirildi: ${repaired
+      `Kaynak PDF'te farklı yazılmış ${repaired.length} uygulama başlığı eşleştirildi: ${repaired
         .slice(0, 6)
         .join(", ")}${repaired.length > 6 ? " …" : ""}`
     );
@@ -435,9 +486,10 @@ export function parseProgram(pages, options = {}) {
   const rows = [];
   for (const o of [...outcomes.values()].sort((a, b) => a.order - b.order)) {
     const nums = o.code.split(".").slice(1).map(Number);
-    const grade = nums.length >= 3 ? nums[0] : null;
-    const app = (apps.get(o.code) || "").trim();
+    const grade = nums.length >= 3 ? nums[0] : o.grade;
+    const app = (apps.get(o.key) || "").trim();
     rows.push({
+      id: o.key,
       no: rows.length + 1,
       grade,
       areaNo: o.areaNo,
@@ -451,14 +503,18 @@ export function parseProgram(pages, options = {}) {
     });
   }
 
-  const missing = rows.filter((r) => !r.applications).map((r) => r.code);
+  const missing = rows.filter((r) => !r.applications).map((r) => `${r.code}${r.area ? ` (${r.area})` : ""}`);
   if (missing.length)
     warnings.push(
       `${missing.length} öğrenme çıktısının uygulama metni bulunamadı: ${missing
         .slice(0, 10)
         .join(", ")}${missing.length > 10 ? " …" : ""}`
     );
-  const orphanApps = [...apps.keys()].filter((c) => !outcomes.has(c));
+  const unmatchedApplications = [...apps].filter(([key]) => !outcomes.has(key)).map(([key,text]) => {
+    const [scope,code] = key.split("|");
+    return { code, area: areas[+scope-1]?.name || "", applications: text };
+  });
+  const orphanApps = unmatchedApplications.map(r => r.code);
   if (orphanApps.length)
     warnings.push(
       `${orphanApps.length} uygulama metni bir çıktıyla eşleşmedi: ${orphanApps
@@ -472,6 +528,7 @@ export function parseProgram(pages, options = {}) {
     courseCode,
     startPage,
     warnings,
+    unmatchedApplications,
     areaCount: areas.length,
     areas: areas.map((a) => a.name),
   };
